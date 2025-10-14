@@ -128,11 +128,8 @@ Issues and PRs welcome!
 
 ## 📄 License
 
-MIT
+GPL-3.0 - See [LICENSE.txt](LICENSE.txt) for details.
+
+Copyright (C) 2025
 
 ---
-
-**Made with ❤️ for productive Twitter reading**
-
-🧵 Turn threads into knowledge, automatically.
-
