@@ -27,6 +27,9 @@ from rich.table import Table
 app = typer.Typer(help="🧵 Threadsmith - Twitter bookmarks to Cursor rules")
 console = Console()
 
+# Global model override for all commands
+model_override: Optional[str] = None
+
 
 class ThreadSmith:
     """Core Threadsmith functionality"""
@@ -132,14 +135,23 @@ class ThreadSmith:
         
         token_url = "https://api.twitter.com/2/oauth2/token"
         
+        # Use HTTP Basic Auth with client credentials
+        import base64
+        client_credentials = f"{self.config['oauth2_client_id']}:{self.config['oauth2_client_secret']}"
+        encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
+        
+        headers = {
+            'Authorization': f'Basic {encoded_credentials}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
         data = {
             'grant_type': 'refresh_token',
-            'refresh_token': self.config['oauth2_refresh_token'],
-            'client_id': self.config['oauth2_client_id']
+            'refresh_token': self.config['oauth2_refresh_token']
         }
         
         try:
-            response = requests.post(token_url, data=data)
+            response = requests.post(token_url, headers=headers, data=data)
             
             if response.status_code == 200:
                 token_data = response.json()
@@ -806,13 +818,20 @@ def _select_model_with_gum() -> Optional[Path]:
 @app.command(name="sync")
 def cmd_sync():
     """Sync bookmarks → convert to .mdc rules"""
-    # Interactive model selection with gum
-    console.print("[cyan]🔍 Select model for processing...[/cyan]")
-    selected_model = _select_model_with_gum()
-    
-    if not selected_model:
-        console.print("[red]❌ No model selected[/red]")
-        raise typer.Exit(code=1)
+    # Use global model override if provided, otherwise interactive selection
+    if model_override:
+        selected_model = Path(model_override)
+        if not selected_model.exists():
+            console.print(f"[red]❌ Model not found: {model_override}[/red]")
+            raise typer.Exit(code=1)
+    else:
+        # Interactive model selection with gum
+        console.print("[cyan]🔍 Select model for processing...[/cyan]")
+        selected_model = _select_model_with_gum()
+        
+        if not selected_model:
+            console.print("[red]❌ No model selected[/red]")
+            raise typer.Exit(code=1)
     
     size_gb = selected_model.stat().st_size / (1024**3)
     console.print(f"[green]✓ Using: {selected_model.name} ({size_gb:.1f} GB)[/green]\n")
@@ -825,7 +844,25 @@ def cmd_sync():
 @app.command(name="add")
 def cmd_add(url: str):
     """Add a thread: threadsmith add <url>"""
-    smith = ThreadSmith()
+    # Use global model override if provided, otherwise interactive selection
+    if model_override:
+        selected_model = Path(model_override)
+        if not selected_model.exists():
+            console.print(f"[red]❌ Model not found: {model_override}[/red]")
+            raise typer.Exit(code=1)
+    else:
+        # Interactive model selection with gum
+        console.print("[cyan]🔍 Select model for processing...[/cyan]")
+        selected_model = _select_model_with_gum()
+        
+        if not selected_model:
+            console.print("[red]❌ No model selected[/red]")
+            raise typer.Exit(code=1)
+    
+    size_gb = selected_model.stat().st_size / (1024**3)
+    console.print(f"[green]✓ Using: {selected_model.name} ({size_gb:.1f} GB)[/green]\n")
+    
+    smith = ThreadSmith(model_override=str(selected_model))
     if smith.process_url(url):
         console.print("[green]✓ Done![/green]")
     else:
@@ -839,5 +876,163 @@ def cmd_ls():
     smith.list_processed()
 
 
+@app.command(name="status")
+def cmd_status():
+    """Check Twitter API connection status"""
+    smith = ThreadSmith()
+    
+    console.print("[cyan]🔍 Checking Twitter API status...[/cyan]")
+    
+    # Test the current token
+    if smith._check_and_refresh_token():
+        user_id = smith._get_user_id()
+        if user_id:
+            console.print("[green]✅ Twitter API connection successful![/green]")
+            console.print(f"[green]User ID: {user_id}[/green]")
+        else:
+            console.print("[red]❌ Failed to get user ID[/red]")
+    else:
+        console.print("[red]❌ Token refresh failed. Run 'threadsmith reauth' to re-authenticate.[/red]")
+
+
+@app.command(name="reauth")
+def cmd_reauth():
+    """Re-authenticate with Twitter (manual OAuth flow)"""
+    console.print("[cyan]🔄 Starting Twitter OAuth2 re-authentication...[/cyan]")
+    
+    # Load current config
+    try:
+        with open("config.json", 'r') as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        console.print("[red]❌ config.json not found. Please set up your configuration first.[/red]")
+        raise typer.Exit(code=1)
+    
+    client_id = config.get('oauth2_client_id')
+    client_secret = config.get('oauth2_client_secret')
+    
+    if not client_id or not client_secret:
+        console.print("[red]❌ Missing client_id or client_secret in config.json[/red]")
+        raise typer.Exit(code=1)
+    
+    # Manual OAuth2 flow
+    console.print("\n[yellow]📋 Manual OAuth2 Flow:[/yellow]")
+    console.print("1. Visit the authorization URL below")
+    console.print("2. Authorize the application")
+    console.print("3. You'll be redirected to http://localhost:3000/callback with a code parameter")
+    console.print("4. Copy the authorization code from the URL and paste it here")
+    console.print("\n[green]✅ Using your registered redirect URI: http://localhost:3000/callback[/green]\n")
+    
+    # Generate authorization URL manually
+    import secrets
+    import hashlib
+    import base64
+    
+    # Generate PKCE parameters
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode('utf-8')).digest()
+    ).decode('utf-8').rstrip('=')
+    
+    state = secrets.token_urlsafe(32)
+    
+    # Build authorization URL with PKCE
+    auth_params = {
+        'response_type': 'code',
+        'client_id': client_id,
+        'redirect_uri': 'http://localhost:3000/callback',
+        'scope': 'tweet.read users.read bookmark.read offline.access',
+        'state': state,
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256'
+    }
+    
+    from urllib.parse import urlencode
+    auth_url = "https://twitter.com/i/oauth2/authorize?" + urlencode(auth_params)
+    
+    console.print(f"[cyan]Authorization URL:[/cyan]")
+    console.print(f"[blue]{auth_url}[/blue]\n")
+    
+    # Get authorization code from user
+    redirect_url = input("Enter the full redirect URL or just the authorization code: ").strip()
+    
+    if not redirect_url:
+        console.print("[red]❌ No redirect URL or authorization code provided[/red]")
+        raise typer.Exit(code=1)
+    
+    # Extract authorization code from URL if full URL was provided
+    if redirect_url.startswith('http'):
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed_url = urlparse(redirect_url)
+            query_params = parse_qs(parsed_url.query)
+            
+            if 'code' not in query_params:
+                console.print("[red]❌ No authorization code found in redirect URL[/red]")
+                raise typer.Exit(code=1)
+            
+            auth_code = query_params['code'][0]
+            console.print(f"[green]✓ Extracted authorization code: {auth_code[:20]}...[/green]")
+        except Exception as e:
+            console.print(f"[red]❌ Error parsing redirect URL: {e}[/red]")
+            raise typer.Exit(code=1)
+    else:
+        # Assume it's just the authorization code
+        auth_code = redirect_url
+    
+    try:
+        # Exchange authorization code for tokens
+        token_url = "https://api.twitter.com/2/oauth2/token"
+        
+        # Use HTTP Basic Auth with client credentials
+        import base64
+        client_credentials = f"{client_id}:{client_secret}"
+        encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
+        
+        headers = {
+            'Authorization': f'Basic {encoded_credentials}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        data = {
+            'grant_type': 'authorization_code',
+            'code': auth_code,
+            'redirect_uri': 'http://localhost:3000/callback',
+            'code_verifier': code_verifier
+        }
+        
+        response = requests.post(token_url, headers=headers, data=data)
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            
+            # Update config with new tokens
+            config['oauth2_access_token'] = token_data['access_token']
+            if 'refresh_token' in token_data:
+                config['oauth2_refresh_token'] = token_data['refresh_token']
+            
+            # Save updated config
+            with open("config.json", 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            console.print("[green]✅ Authentication successful! Tokens updated.[/green]")
+            console.print("[green]You can now use threadsmith commands.[/green]")
+        else:
+            console.print(f"[red]❌ Token exchange failed: {response.text}[/red]")
+            raise typer.Exit(code=1)
+        
+    except Exception as e:
+        console.print(f"[red]❌ Authentication failed: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+def main(
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Path to LLM model file")
+):
+    """🧵 Threadsmith - Twitter bookmarks to Cursor rules"""
+    global model_override
+    model_override = model
+
 if __name__ == "__main__":
+    app.callback()(main)
     app()
