@@ -39,21 +39,47 @@ source ~/.zshrc
 
 ## Twitter API Setup
 
+### 1. Create Twitter App
+
 1. Go to [Twitter Developer Portal](https://developer.twitter.com)
-2. Create a new app
-3. Enable OAuth 2.0 with these scopes:
+2. Create a new app (Project & App)
+3. Navigate to your app settings
+
+### 2. Configure OAuth 2.0
+
+1. In app settings, go to "User authentication settings"
+2. Set **OAuth 2.0** settings:
+   - **Type of App**: Web App
+   - **Callback URI / Redirect URL**: `http://localhost:3000/callback`
+   - **Website URL**: `http://localhost:3000` (or your actual site)
+3. Enable these scopes:
    - `tweet.read`
    - `users.read`
    - `bookmark.read`
-   - `offline.access`
-4. Get your credentials:
-   - Client ID
-   - Client Secret
-   - Access Token (use OAuth flow)
-   - Refresh Token
-5. Add to `config.json`
+   - `offline.access` (for refresh tokens)
+4. Save settings
 
-**Note:** Free tier has strict limits (1 request per 15 minutes). See `RATE_LIMITS.md` for details.
+### 3. Get Credentials
+
+1. Copy your **Client ID** and **Client Secret**
+2. Generate OAuth 2.0 tokens using PKCE flow:
+   - Use Twitter's OAuth 2.0 authorize URL
+   - Redirect to `http://localhost:3000/callback`
+   - Exchange code for access token + refresh token
+3. Add all credentials to `config.json`:
+   ```json
+   {
+     "oauth2_client_id": "YOUR_CLIENT_ID",
+     "oauth2_client_secret": "YOUR_CLIENT_SECRET",
+     "oauth2_access_token": "YOUR_ACCESS_TOKEN",
+     "oauth2_refresh_token": "YOUR_REFRESH_TOKEN"
+   }
+   ```
+
+**Important Notes:**
+- Free tier: 1 request per 15 minutes (see `RATE_LIMITS.md`)
+- Redirect URI must be exact: `http://localhost:3000/callback`
+- Threadsmith auto-refreshes tokens using HTTP Basic Auth
 
 ## Llama.cpp Setup
 
@@ -125,7 +151,10 @@ brew install gum
 ### "Authentication failed"
 - Verify Twitter API credentials in `config.json`
 - Check scopes include `bookmark.read` and `offline.access`
+- Ensure redirect URI is exactly: `http://localhost:3000/callback`
+- Regenerate OAuth2 tokens if needed (old tokens may be invalid)
 - Run `threadsmith auth` to test
+- If token expired, Threadsmith will auto-refresh using refresh token
 
 ### "Model not found"
 ```bash

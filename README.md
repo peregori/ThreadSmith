@@ -18,12 +18,18 @@ Turn your saved (bookmarked) X threads into reusable `.mdc` rules for Cursor —
    pip install -r requirements.txt
    ```
 
-3. Set up your `config.json` with Twitter/X OAuth2 credentials (see `config.example.json`)
+3. Set up your `config.json` with Twitter/X OAuth2 credentials:
+   - Copy `config.example.json` to `config.json`
+   - Add your Twitter API credentials (OAuth2 Client ID, Client Secret)
+   - Get OAuth2 tokens with proper PKCE flow
+   - Redirect URI must be: `http://localhost:3000/callback`
 
-4. Make sure you have `llama.cpp` installed with a model:
-   - Install: [llama.cpp](https://github.com/ggerganov/llama.cpp)
-   - Download a model (e.g., Mistral, Llama, Gemma)
-   - Update `llama_command` and `llama_model_path` in `config.json`
+4. Set up local LLM with llama.cpp:
+   - Install llama.cpp or llama-cpp-python
+   - Download a GGUF model (Qwen, Gemma, Llama, etc.)
+   - Update `llama_model_path` in `config.json`
+
+See [INSTALL.md](INSTALL.md) for detailed setup instructions.
 
 ## 🚀 Usage
 
@@ -66,7 +72,7 @@ See [RATE_LIMITS.md](RATE_LIMITS.md) for optimization details.
 
 1. Set output folder in `config.json`:
    ```json
-   "output_folder": "~/.cursor/rules/twitter/"
+   "output_folder": "~/.cursor/rules/"
    ```
 
 2. Create the directory:

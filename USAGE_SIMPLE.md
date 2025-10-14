@@ -24,10 +24,9 @@ threadsmith auth
 # See available models (shows ✓ for current)
 threadsmith ls-models
 
-# Switch to different model (fuzzy matching!)
-threadsmith use qwen3          # Matches qwen3-14B-Q4_K_M.gguf
-threadsmith use gemma3n        # Matches gemma3n-E2B-it-Q4_0.gguf
-threadsmith use gemma3-27B     # Matches gemma3-27B-it-qat-Q4_0.gguf
+threadsmith use qwen3
+threadsmith use gemma3n
+threadsmith use gemma3-27B
 ```
 
 ---

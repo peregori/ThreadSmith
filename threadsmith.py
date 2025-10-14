@@ -39,7 +39,6 @@ class ThreadSmith:
         self.config_path = Path(config_path)
         self.config = self._load_config()
         
-        # Override model if specified
         if model_override:
             self.config['llama_model_path'] = model_override
         
@@ -47,7 +46,6 @@ class ThreadSmith:
         self.data_dir = self.base_dir / "data"
         self.data_dir.mkdir(exist_ok=True)
         
-        # Set up processed threads tracking
         self.processed_file = Path(self.config.get(
             "processed_threads_file", 
             "./data/processed_threads.json"
@@ -55,11 +53,8 @@ class ThreadSmith:
         self.processed_file.parent.mkdir(exist_ok=True, parents=True)
         self.processed_tweets = self._load_processed_tweets()
         
-        # Rate limiting (Twitter free tier: 1 request per 15 minutes!)
         self.last_api_call = 0
-        self.min_delay = 900  # 900 seconds = 15 minutes between calls
-        
-        # Cache user_id to avoid extra API calls
+        self.min_delay = 900
         self.cached_user_id = None
         
     def _load_config(self) -> Dict:
@@ -68,7 +63,6 @@ class ThreadSmith:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
             
-            # Validate required fields
             required = ['oauth2_client_id', 'oauth2_access_token']
             missing = [field for field in required if field not in config]
             if missing:
@@ -110,14 +104,13 @@ class ThreadSmith:
     def _check_and_refresh_token(self) -> bool:
         """Check if access token is expired and refresh if needed."""
         if 'oauth2_refresh_token' not in self.config:
-            return True  # No refresh token, assume token is valid
+            return True
         
-        # Try to make a simple API call to test the token
         headers = {"Authorization": f"Bearer {self.config['oauth2_access_token']}"}
         try:
             response = requests.get("https://api.twitter.com/2/users/me", headers=headers)
             if response.status_code == 200:
-                return True  # Token is valid
+                return True
             
             if response.status_code == 401:
                 console.print("[yellow]🔄 Access token expired, refreshing...[/yellow]")
@@ -128,14 +121,13 @@ class ThreadSmith:
         return True
     
     def _refresh_access_token(self) -> bool:
-        """Refresh the OAuth2 access token using refresh token."""
+        """Refresh OAuth2 token using HTTP Basic Auth with PKCE."""
         if 'oauth2_refresh_token' not in self.config:
             console.print("[red]❌ No refresh token available. Please re-authenticate.[/red]")
             return False
         
         token_url = "https://api.twitter.com/2/oauth2/token"
         
-        # Use HTTP Basic Auth with client credentials
         import base64
         client_credentials = f"{self.config['oauth2_client_id']}:{self.config['oauth2_client_secret']}"
         encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
@@ -169,7 +161,7 @@ class ThreadSmith:
             return False
     
     def _rate_limit_wait(self):
-        """Wait if needed to respect rate limits (15 min = 900s between calls!)."""
+        """Wait if needed to respect Twitter API rate limits."""
         elapsed = time.time() - self.last_api_call
         if self.last_api_call > 0 and elapsed < self.min_delay:
             wait_time = self.min_delay - elapsed
@@ -180,8 +172,7 @@ class ThreadSmith:
         self.last_api_call = time.time()
     
     def _get_user_id(self) -> Optional[str]:
-        """Get the authenticated user's ID (cached to avoid extra API calls)."""
-        # Return cached if available
+        """Get authenticated user's ID (cached)."""
         if self.cached_user_id:
             return self.cached_user_id
         
@@ -201,7 +192,7 @@ class ThreadSmith:
             elif response.status_code == 429:
                 console.print("[yellow]⚠️  Rate limited! Waiting 15 minutes...[/yellow]")
                 time.sleep(900)
-                return self._get_user_id()  # Retry
+                return self._get_user_id()
             else:
                 console.print(f"[red]❌ Failed to get user ID: {response.text}[/red]")
                 return None
@@ -210,7 +201,7 @@ class ThreadSmith:
             return None
     
     def fetch_bookmarks(self) -> List[Dict]:
-        """Fetch user's bookmarked tweets from Twitter API."""
+        """Fetch user's bookmarked tweets."""
         if not self._check_and_refresh_token():
             return []
         
@@ -237,7 +228,6 @@ class ThreadSmith:
                 data = response.json()
                 bookmarks = data.get('data', [])
                 
-                # Attach username information
                 if 'includes' in data and 'users' in data['includes']:
                     users_map = {u['id']: u for u in data['includes']['users']}
                     for bookmark in bookmarks:
@@ -255,14 +245,12 @@ class ThreadSmith:
             return []
     
     def fetch_thread(self, tweet_id: str, conversation_id: str, author_id: str) -> List[Dict]:
-        """Fetch all tweets in a thread by the same author (OPTIMIZED: 1 API call only!)."""
+        """Fetch all tweets in thread using conversation search."""
         if not self._check_and_refresh_token():
             return []
         
         self._rate_limit_wait()
         
-        # OPTIMIZATION: Skip individual tweet fetch, use conversation search directly
-        # This saves 1 API call per thread (15 minutes saved!)
         headers = {"Authorization": f"Bearer {self.config['oauth2_access_token']}"}
         search_url = "https://api.twitter.com/2/tweets/search/recent"
         search_params = {
@@ -278,7 +266,6 @@ class ThreadSmith:
                 data = response.json()
                 if 'data' in data:
                     tweets = data['data']
-                    # Sort chronologically
                     sorted_tweets = sorted(tweets, key=lambda x: x.get('created_at', ''))
                     return sorted_tweets
             elif response.status_code == 429:
@@ -291,7 +278,7 @@ class ThreadSmith:
         return []
     
     def _check_llm_server(self) -> bool:
-        """Check if llama-server is running on localhost:8080"""
+        """Check if llama-server is running."""
         try:
             response = requests.get("http://localhost:8080/health", timeout=2)
             return response.status_code == 200
@@ -299,13 +286,13 @@ class ThreadSmith:
             return False
     
     def _generate_with_server(self, prompt: str) -> Optional[str]:
-        """Use running llama-server (fastest!)"""
+        """Generate using llama-server."""
         url = "http://localhost:8080/completion"
         data = {
             "prompt": prompt,
             "n_predict": self.config.get('llama_max_tokens', 3000),
             "temperature": self.config.get('llama_temperature', 0.7),
-            "stop": ["</s>"]  # Don't stop at "---" (markdown tables)
+            "stop": ["</s>"]
         }
         
         try:
@@ -337,11 +324,10 @@ class ThreadSmith:
             return None
     
     def _generate_with_python(self, prompt: str, model_path: str, llm_instance=None) -> Optional[str]:
-        """Use llama-cpp-python (good balance)"""
+        """Generate using llama-cpp-python."""
         try:
             from llama_cpp import Llama
             
-            # Use provided instance or load new one
             if llm_instance is None:
                 console.print("[cyan]   Loading model into memory...[/cyan]")
                 llm = Llama(
@@ -359,7 +345,7 @@ class ThreadSmith:
                 prompt,
                 max_tokens=self.config.get('llama_max_tokens', 3000),
                 temperature=self.config.get('llama_temperature', 0.7),
-                stop=["</s>"],  # Don't stop at "---" (markdown tables)
+                stop=["</s>"],
                 echo=False
             )
             
@@ -373,7 +359,7 @@ class ThreadSmith:
             return None
     
     def _generate_mdc(self, thread_text: str, tweet_url: str, llm_instance=None) -> Optional[str]:
-        """Internal generation method that accepts pre-loaded LLM."""
+        """Generate .mdc content using local LLM."""
         model_path = self.config.get('llama_model_path')
         
         if not model_path or not Path(model_path).exists():
@@ -382,14 +368,12 @@ class ThreadSmith:
         
         prompt = self._create_prompt(thread_text)
         
-        # Strategy 1: Try llama-server if running
         if self._check_llm_server():
             console.print("[green]✓ Using llama-server[/green]")
             output = self._generate_with_server(prompt)
             if output:
                 return self._clean_llm_output(output)
         
-        # Strategy 2: Try llama-cpp-python with optional pre-loaded model
         output = self._generate_with_python(prompt, model_path, llm_instance)
         if output:
             return self._clean_llm_output(output)
@@ -398,7 +382,7 @@ class ThreadSmith:
         return None
     
     def generate_mdc_with_llm(self, thread_text: str, tweet_url: str) -> Optional[str]:
-        """Generate .mdc content using local LLM with smart strategy selection."""
+        """Generate .mdc content using local LLM."""
         return self._generate_mdc(thread_text, tweet_url, llm_instance=None)
     
     def _create_prompt(self, thread_text: str) -> str:
@@ -422,20 +406,15 @@ Thread:
 Markdown content:"""
     
     def _clean_llm_output(self, output: str) -> str:
-        """Clean up LLM output to extract just the markdown content."""
-        # Remove any leading/trailing whitespace
+        """Clean LLM output to extract markdown content."""
         output = output.strip()
         
-        # Remove thinking tags if present (Qwen3 and other reasoning models)
         if '<think>' in output or '</think>' in output:
-            # Extract content after </think>
             parts = output.split('</think>')
             if len(parts) > 1:
                 output = parts[-1].strip()
-            # Remove any remaining <think> tags
             output = output.replace('<think>', '').replace('</think>', '').strip()
         
-        # Remove any yaml frontmatter if present
         if output.startswith('---'):
             parts = output.split('---', 2)
             if len(parts) >= 3:
@@ -448,17 +427,14 @@ Markdown content:"""
         output_folder = Path(self.config.get('output_folder', './rules/'))
         output_folder.mkdir(exist_ok=True, parents=True)
         
-        # Generate filename from title or URL
         if title:
             filename = slugify(title) + '.mdc'
         else:
-            # Extract tweet ID from URL for filename
             tweet_id = tweet_url.split('/')[-1].split('?')[0]
             filename = f"twitter-thread-{tweet_id}.mdc"
         
         filepath = output_folder / filename
         
-        # Create YAML frontmatter
         frontmatter = f"""---
 alwaysApply: false
 source: "{tweet_url}"
@@ -467,7 +443,6 @@ synced: "{datetime.now().isoformat()}"
 
 """
         
-        # Combine frontmatter and content
         full_content = frontmatter + content
         
         try:
@@ -483,18 +458,15 @@ synced: "{datetime.now().isoformat()}"
         """Process a single bookmark: fetch thread, generate .mdc."""
         tweet_id = bookmark['id']
         
-        # Check if already processed
         if tweet_id in self.processed_tweets:
             return False
         
         console.print(f"\n[cyan]📝 Processing tweet {tweet_id}...[/cyan]")
         
-        # Get thread information
         conversation_id = bookmark.get('conversation_id', tweet_id)
         author_id = bookmark.get('author_id')
         author_username = bookmark.get('author_username', 'unknown')
         
-        # Fetch full thread
         thread_tweets = self.fetch_thread(tweet_id, conversation_id, author_id)
         
         if not thread_tweets:
@@ -503,33 +475,27 @@ synced: "{datetime.now().isoformat()}"
         
         console.print(f"[green]✓ Found {len(thread_tweets)} tweets in thread[/green]")
         
-        # Combine thread text
         thread_text = "\n\n".join([
             f"Tweet {i+1}:\n{tweet.get('text', '')}"
             for i, tweet in enumerate(thread_tweets)
         ])
         
-        # Generate tweet URL
         tweet_url = f"https://x.com/{author_username}/status/{tweet_id}"
         
-        # Generate .mdc content with LLM
         mdc_content = self.generate_mdc_with_llm(thread_text, tweet_url)
         
         if not mdc_content:
             console.print("[red]❌ Failed to generate .mdc content[/red]")
             return False
         
-        # Extract title from first line of content if it's a heading
         title = None
         lines = mdc_content.split('\n')
         if lines and lines[0].startswith('# '):
             title = lines[0][2:].strip()
         
-        # Save as .mdc
         saved_path = self.save_as_mdc(mdc_content, tweet_url, title)
         
         if saved_path:
-            # Mark as processed
             self.processed_tweets.add(tweet_id)
             self._save_processed_tweets()
             return True
@@ -537,17 +503,15 @@ synced: "{datetime.now().isoformat()}"
         return False
     
     def sync_bookmarks(self, batch_mode: bool = True):
-        """Main sync command: fetch new bookmarks and convert to .mdc."""
+        """Sync bookmarks and convert to .mdc files."""
         console.print("[bold cyan]🔄 Starting bookmark sync...[/bold cyan]")
         
-        # Fetch bookmarks
         bookmarks = self.fetch_bookmarks()
         
         if not bookmarks:
             console.print("[yellow]No bookmarks found or error fetching[/yellow]")
             return
         
-        # Filter to new bookmarks only
         new_bookmarks = [b for b in bookmarks if b['id'] not in self.processed_tweets]
         
         if not new_bookmarks:
@@ -557,7 +521,6 @@ synced: "{datetime.now().isoformat()}"
         console.print(f"[cyan]📚 Found {len(new_bookmarks)} new bookmarks to process[/cyan]")
         
         if batch_mode and len(new_bookmarks) > 1:
-            # BATCH MODE: Fetch all threads first, then process with LLM
             console.print("[cyan]🔄 Phase 1: Fetching all threads from Twitter...[/cyan]")
             thread_data = []
             
@@ -569,7 +532,6 @@ synced: "{datetime.now().isoformat()}"
                 author_id = bookmark.get('author_id')
                 author_username = bookmark.get('author_username', 'unknown')
                 
-                # Fetch thread tweets
                 thread_tweets = self.fetch_thread(tweet_id, conversation_id, author_id)
                 
                 if thread_tweets:
@@ -588,12 +550,9 @@ synced: "{datetime.now().isoformat()}"
                     console.print(f"[green]✓ ({len(thread_tweets)} tweets)[/green]")
                 else:
                     console.print("[yellow]⚠️  Failed[/yellow]")
-                
-                # Rate limiting handled by _rate_limit_wait() in fetch_thread()
             
             console.print(f"\n[cyan]🧠 Phase 2: Processing {len(thread_data)} threads with LLM...[/cyan]")
             
-            # Load LLM once if using llama-cpp-python
             llm_instance = None
             use_python_bindings = not self._check_llm_server()
             
@@ -601,22 +560,18 @@ synced: "{datetime.now().isoformat()}"
                 console.print("[cyan]   Loading model into memory (one time)...[/cyan]")
                 llm_instance = self._load_llm_model()
             
-            # Process all threads
             processed_count = 0
             for i, data in enumerate(thread_data, 1):
                 console.print(f"\n[bold]Generating .mdc {i}/{len(thread_data)}[/bold]")
                 
-                # Generate with pre-loaded model
                 mdc_content = self._generate_mdc(data['thread_text'], data['tweet_url'], llm_instance)
                 
                 if mdc_content:
-                    # Extract title
                     title = None
                     lines = mdc_content.split('\n')
                     if lines and lines[0].startswith('# '):
                         title = lines[0][2:].strip()
                     
-                    # Save
                     saved_path = self.save_as_mdc(mdc_content, data['tweet_url'], title)
                     if saved_path:
                         self.processed_tweets.add(data['tweet_id'])
@@ -625,7 +580,6 @@ synced: "{datetime.now().isoformat()}"
             
             console.print(f"\n[bold green]✓ Sync complete! Processed {processed_count} new threads[/bold green]")
         else:
-            # SEQUENTIAL MODE: One at a time (old behavior)
             processed_count = 0
             for i, bookmark in enumerate(new_bookmarks, 1):
                 console.print(f"\n[bold]Processing {i}/{len(new_bookmarks)}[/bold]")
@@ -638,8 +592,7 @@ synced: "{datetime.now().isoformat()}"
             console.print(f"\n[bold green]✓ Sync complete! Processed {processed_count} new threads[/bold green]")
     
     def process_url(self, url: str) -> bool:
-        """Process a single Twitter/X URL manually."""
-        # Extract tweet ID from URL
+        """Process a single Twitter/X URL."""
         tweet_id = self._extract_tweet_id(url)
         
         if not tweet_id:
@@ -648,7 +601,6 @@ synced: "{datetime.now().isoformat()}"
         
         console.print(f"[cyan]Processing tweet: {tweet_id}[/cyan]")
         
-        # Fetch the tweet to get metadata
         if not self._check_and_refresh_token():
             return False
         
@@ -673,14 +625,12 @@ synced: "{datetime.now().isoformat()}"
                 console.print("[red]❌ Tweet not found[/red]")
                 return False
             
-            # Get author username
             author_username = 'unknown'
             if 'includes' in data and 'users' in data['includes']:
                 users = data['includes']['users']
                 if users:
                     author_username = users[0]['username']
             
-            # Create bookmark-like structure
             bookmark = {
                 'id': tweet_id,
                 'conversation_id': tweet_data.get('conversation_id', tweet_id),
@@ -697,7 +647,6 @@ synced: "{datetime.now().isoformat()}"
     
     def _extract_tweet_id(self, url: str) -> Optional[str]:
         """Extract tweet ID from Twitter/X URL."""
-        # Handle various URL formats
         patterns = [
             r'twitter\.com/\w+/status/(\d+)',
             r'x\.com/\w+/status/(\d+)',
@@ -710,7 +659,6 @@ synced: "{datetime.now().isoformat()}"
             if match:
                 return match.group(1)
         
-        # If it's just a number, assume it's a tweet ID
         if url.isdigit():
             return url
         
@@ -736,11 +684,9 @@ synced: "{datetime.now().isoformat()}"
         table.add_column("Source", style="blue")
         
         for mdc_file in mdc_files:
-            # Read metadata
             try:
                 with open(mdc_file, 'r') as f:
                     content = f.read()
-                    # Extract source from frontmatter
                     source = "N/A"
                     if content.startswith('---'):
                         parts = content.split('---', 2)
@@ -764,10 +710,8 @@ synced: "{datetime.now().isoformat()}"
         console.print(f"\n[green]Total: {len(mdc_files)} files[/green]")
 
 
-# CLI Commands - Ultra Simple (Like .zshrc)
-
 def _select_model_with_gum() -> Optional[Path]:
-    """Use gum to interactively select a model."""
+    """Interactive model selection using gum."""
     cache_dir = Path.home() / "Library/Caches/llama.cpp"
     models = sorted(cache_dir.glob("*.gguf"))
     
@@ -775,7 +719,6 @@ def _select_model_with_gum() -> Optional[Path]:
         console.print("[yellow]No models found[/yellow]")
         return None
     
-    # Get current model
     try:
         with open("config.json") as f:
             config = json.load(f)
@@ -783,7 +726,6 @@ def _select_model_with_gum() -> Optional[Path]:
     except:
         current = None
     
-    # Prepare choices with sizes
     choices = []
     for model in models:
         size_gb = model.stat().st_size / (1024**3)
@@ -791,7 +733,6 @@ def _select_model_with_gum() -> Optional[Path]:
         choice = f"{marker}{model.stem} ({size_gb:.1f} GB)"
         choices.append(choice)
     
-    # Use gum to select
     try:
         result = subprocess.run(
             ["gum", "choose", "--header", "💬 Select a model:"] + choices,
@@ -801,31 +742,26 @@ def _select_model_with_gum() -> Optional[Path]:
         
         if result.returncode == 0:
             selected = result.stdout.strip()
-            # Extract model name from choice
             model_name = selected.split('(')[0].strip().replace('✓ ', '').strip()
             
-            # Find the model
             for model in models:
                 if model.stem == model_name:
                     return model
         return None
     except FileNotFoundError:
         console.print("[yellow]⚠️  gum not found, install with: brew install gum[/yellow]")
-        # Fallback: use first model
         return models[0] if models else None
 
 
 @app.command(name="sync")
 def cmd_sync():
     """Sync bookmarks → convert to .mdc rules"""
-    # Use global model override if provided, otherwise interactive selection
     if model_override:
         selected_model = Path(model_override)
         if not selected_model.exists():
             console.print(f"[red]❌ Model not found: {model_override}[/red]")
             raise typer.Exit(code=1)
     else:
-        # Interactive model selection with gum
         console.print("[cyan]🔍 Select model for processing...[/cyan]")
         selected_model = _select_model_with_gum()
         
@@ -836,7 +772,6 @@ def cmd_sync():
     size_gb = selected_model.stat().st_size / (1024**3)
     console.print(f"[green]✓ Using: {selected_model.name} ({size_gb:.1f} GB)[/green]\n")
     
-    # Initialize with selected model
     smith = ThreadSmith(model_override=str(selected_model))
     smith.sync_bookmarks()
 
@@ -844,14 +779,12 @@ def cmd_sync():
 @app.command(name="add")
 def cmd_add(url: str):
     """Add a thread: threadsmith add <url>"""
-    # Use global model override if provided, otherwise interactive selection
     if model_override:
         selected_model = Path(model_override)
         if not selected_model.exists():
             console.print(f"[red]❌ Model not found: {model_override}[/red]")
             raise typer.Exit(code=1)
     else:
-        # Interactive model selection with gum
         console.print("[cyan]🔍 Select model for processing...[/cyan]")
         selected_model = _select_model_with_gum()
         
