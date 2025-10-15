@@ -301,7 +301,7 @@ class ThreadSmith:
         headers = {"Authorization": f"Bearer {self.config['oauth2_access_token']}"}
         url = f"https://api.twitter.com/2/tweets/{tweet_id}"
         params = {
-            "tweet.fields": "created_at,text,author_id,conversation_id,referenced_tweets"
+            "tweet.fields": "created_at,text,author_id,conversation_id"
         }
         
         try:
@@ -323,40 +323,6 @@ class ThreadSmith:
             console.print(f"[yellow]⚠️  Could not fetch tweet: {e}[/yellow]")
         
         return None
-    
-    def walk_reply_chain(self, tweet_id: str) -> List[Dict]:
-        """Walk up the reply chain to reconstruct thread (works for any age on free tier)."""
-        thread_tweets = []
-        current_id = tweet_id
-        max_depth = 50  # Safety limit
-        
-        console.print(f"[dim]   Walking reply chain to reconstruct thread...[/dim]")
-        
-        for depth in range(max_depth):
-            tweet = self.fetch_single_tweet(current_id, skip_rate_limit=(depth > 0))
-            
-            if not tweet:
-                break
-            
-            # Add to beginning of list (we're walking backwards)
-            thread_tweets.insert(0, tweet)
-            
-            # Check if this tweet is a reply to another
-            if 'referenced_tweets' in tweet:
-                replied_to = None
-                for ref in tweet['referenced_tweets']:
-                    if ref.get('type') == 'replied_to':
-                        replied_to = ref.get('id')
-                        break
-                
-                if replied_to:
-                    current_id = replied_to
-                    continue
-            
-            # No parent found - this is the thread start
-            break
-        
-        return thread_tweets
     
     def fetch_thread(self, tweet_id: str, conversation_id: str, author_id: str) -> List[Dict]:
         """Fetch all tweets in thread using conversation search, with fallback to single tweet."""
@@ -386,11 +352,7 @@ class ThreadSmith:
                     return sorted_tweets
                 else:
                     # No tweets found in search (likely older than 7 days for free tier)
-                    console.print(f"[dim]   Thread older than 7 days (search limit) - walking reply chain...[/dim]")
-                    thread_tweets = self.walk_reply_chain(tweet_id)
-                    if thread_tweets:
-                        return thread_tweets
-                    # Final fallback if walking fails
+                    console.print(f"[yellow]⚠️  Thread search failed (older than 7 days). Fetching single tweet...[/yellow]")
                     single_tweet = self.fetch_single_tweet(tweet_id, skip_rate_limit=True)
                     if single_tweet:
                         return [single_tweet]
@@ -401,12 +363,8 @@ class ThreadSmith:
                 return self.fetch_thread(tweet_id, conversation_id, author_id)
             else:
                 console.print(f"[yellow]⚠️  Search API error {response.status_code}: {response.text}[/yellow]")
-                # Try walking reply chain as fallback
-                console.print(f"[dim]   Walking reply chain as fallback...[/dim]")
-                thread_tweets = self.walk_reply_chain(tweet_id)
-                if thread_tweets:
-                    return thread_tweets
-                # Final fallback if walking fails
+                # Try fallback to single tweet
+                console.print(f"[yellow]   Trying single tweet fetch as fallback...[/yellow]")
                 single_tweet = self.fetch_single_tweet(tweet_id, skip_rate_limit=True)
                 if single_tweet:
                     return [single_tweet]
@@ -541,63 +499,18 @@ class ThreadSmith:
         nothink_prefix = "/nothink\n\n" if disable_thinking else ""
         thinking_note = "\n- Thinking or reasoning process" if disable_thinking else ""
         
-        return f"""{nothink_prefix}You are converting a Twitter/X thread into a detailed, actionable Cursor rule file.
+        return f"""{nothink_prefix}You are converting a Twitter thread into a Cursor .mdc rule file.
 
-CRITICAL: Make this EXTENSIVE, DETAILED, and ACTIONABLE. Think of it as a complete guide someone can reference and execute.
-
-STRUCTURE REQUIREMENTS:
-
-1. **Title (H1)**: Clear, descriptive title from the thread's main topic
-
-2. **Overview**: 2-3 paragraph summary explaining:
-   - What this is about
-   - Why it matters
-   - When to use/apply this knowledge
-
-3. **Main Content Sections (H2)**: Break down the thread into logical sections
-   - If it's a checklist: Each item as H2 with subsections
-   - If it's a strategy: Framework steps as H2
-   - If it's tactical: Each tactic as H2
-   
-4. **For Each Section Include**:
-   - **What**: Clear explanation
-   - **Why**: Benefits or reasoning  
-   - **How**: Step-by-step instructions or implementation details
-   - **Tools/Resources**: Specific tools, platforms, links mentioned
-   - **Examples**: Code snippets, templates, or real examples
-   - **Pro Tips**: Additional insights or warnings
-
-5. **Actionable Elements**:
-   - Use checkboxes `- [ ]` for action items
-   - Include code blocks with syntax highlighting when relevant
-   - Add templates or copy-paste examples
-   - List specific tools with brief descriptions
-
-6. **Best Practices Section** (if applicable):
-   - Key takeaways
-   - Common pitfalls to avoid
-   - Optimization tips
-
-7. **Quick Reference** (if complex):
-   - TL;DR summary
-   - Quick checklist
-   - Key metrics or numbers
-
-FORMATTING RULES:
-- Use ### for sub-sections within H2 sections
-- Use bullet points for lists
-- Use numbered lists for sequential steps
-- Use `code formatting` for technical terms, tools, commands
-- Use **bold** for emphasis on key concepts
-- Use > blockquotes for important notes or warnings
-- Include emojis if they add clarity (✅ ❌ 💡 ⚡ 🎯)
-
-TONE: Professional, clear, actionable - like a senior colleague sharing their expertise
+Output ONLY the markdown content with:
+- A clear H1 title
+- A brief summary paragraph
+- H2/H3 sections
+- Bullet points and checklists
+- Code examples if relevant
 
 DO NOT include:
 - YAML frontmatter (---)
-- Meta explanations about what you're doing{thinking_note}
-- Vague generalizations - be SPECIFIC
+- Explanations of what you're doing{thinking_note}
 
 Thread:
 {thread_text}
@@ -634,40 +547,9 @@ Markdown content:"""
         
         filepath = output_folder / filename
         
-        # Auto-detect category tags from content
-        tags = []
-        content_lower = content.lower()
-        
-        # Development tags
-        if any(word in content_lower for word in ['code', 'api', 'database', 'security', 'authentication', 'bug', 'debug']):
-            tags.append('development')
-        if any(word in content_lower for word in ['security', 'auth', 'encryption', 'vulnerability', 'xss', 'csrf']):
-            tags.append('security')
-        
-        # Business/Marketing tags  
-        if any(word in content_lower for word in ['marketing', 'seo', 'launch', 'users', 'growth', 'customer']):
-            tags.append('marketing')
-        if any(word in content_lower for word in ['seo', 'keyword', 'ranking', 'search', 'traffic']):
-            tags.append('seo')
-        if any(word in content_lower for word in ['startup', 'mvp', 'product', 'launch', 'saas']):
-            tags.append('startup')
-        
-        # Strategy tags
-        if any(word in content_lower for word in ['strategy', 'framework', 'process', 'workflow', 'checklist']):
-            tags.append('strategy')
-        if any(word in content_lower for word in ['checklist', 'step', 'guide', 'how to']):
-            tags.append('guide')
-        
-        # Design/UX tags
-        if any(word in content_lower for word in ['design', 'ui', 'ux', 'interface', 'figma']):
-            tags.append('design')
-        
-        tags_str = ', '.join(f'"{tag}"' for tag in tags) if tags else ''
-        tags_line = f'tags: [{tags_str}]\n' if tags else ''
-        
         frontmatter = f"""---
 alwaysApply: false
-{tags_line}source: "{tweet_url}"
+source: "{tweet_url}"
 synced: "{datetime.now().isoformat()}"
 ---
 
