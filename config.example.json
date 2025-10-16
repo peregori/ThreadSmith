@@ -3,13 +3,6 @@
   "oauth2_client_secret": "YOUR_TWITTER_CLIENT_SECRET",
   "oauth2_access_token": "YOUR_TWITTER_ACCESS_TOKEN",
   "oauth2_refresh_token": "YOUR_TWITTER_REFRESH_TOKEN",
-  "llama_command": "/opt/homebrew/bin/llama-cli",
-  "llama_model_path": "~/Library/Caches/llama.cpp/qwen3-14B-Q4_K_M.gguf",
-  "output_folder": "~/.cursor/rules/twitter/",
-  "processed_threads_file": "./data/processed_threads.json",
-  "max_results": 50,
-  "llama_context_size": 8192,
-  "llama_temperature": 0.7,
-  "llama_max_tokens": 3000,
-  "disable_thinking": true
+  "threads_folder": "./data/threads",
+  "max_results": 50
 }

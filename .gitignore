@@ -6,6 +6,10 @@ data/
 rules/
 cache/
 
+# Backups
+*_backup.py
+*.backup
+
 # Python
 __pycache__/
 *.py[cod]

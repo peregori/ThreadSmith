@@ -1,5 +1,10 @@
 #!/bin/bash
 # Threadsmith - Simple CLI wrapper
-cd "$(dirname "$0")"
+# Get the real path by following symlinks
+SCRIPT_PATH="$0"
+if [ -L "$SCRIPT_PATH" ]; then
+    SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
+fi
+cd "$(dirname "$SCRIPT_PATH")"
 exec python3 threadsmith.py "$@"
 
